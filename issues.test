@@ -1,0 +1,17 @@
+student/login:
+Exception in Tkinter callback
+Traceback (most recent call last):
+  File "C:\Users\Mahros\AppData\Local\Python\pythoncore-3.14-64\Lib\tkinter\__init__.py", line 2088, in __call__
+    return self.func(*args)
+           ~~~~~~~~~^^^^^^^
+  File "C:\Users\Mahros\Desktop\gu\testly\ui\testly_app.py", line 143, in <lambda> 
+    ttk.Button(self.main_frame, text="Login", command=lambda: self.student_login(student_id.get())).pack(pady=10)
+                                                              ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Mahros\Desktop\gu\testly\ui\testly_app.py", line 147, in student_login
+    student = self.engine.get_student(student_id)
+              ^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'ExamEngine' object has no attribute 'get_student'. Did you mean: 'add_student'?
+
+
+
+
