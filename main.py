@@ -3,581 +3,872 @@ from tkinter import ttk, messagebox
 import random
 from datetime import datetime
 
-# ================== GLOBAL DATA (IN-MEMORY) ==================
-# All data is stored in memory and cleared when the program closes
+# ================== DATA (SESSION ONLY) ==================
 students = []
 questions = []
-results = []    
+results = []
 
 ADMIN_USER = "admin"
 ADMIN_PASS = "1234"
 
-# Exam settings
 EXAM_DURATION_SECONDS = 60
 QUESTIONS_PER_EXAM = 5
-
-# Exam runtime state
-exam_time_left = 0
-exam_running = False
-timer_after_id = None
 
 current_student = None
 current_questions = []
 current_score = 0
 current_total = 0
-
-# Reference to the currently opened question window
-open_question_window = None
 question_index = 0
-progress_bar = None
+exam_running = False
+exam_time_left = 0
+timer_after_id = None
 
-# ================== HELPER FUNCTIONS ==================
-def safe(s):
-    """Remove leading/trailing spaces and handle None."""
-    return (s or "").strip()
+# ================== HELPERS ==================
+def safe(s): return (s or "").strip()
+def clean(s): return safe(s).replace("|", "/").replace(",", " ")
+def now(): return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def clean(s):
-    """Clean input to avoid format issues."""
-    return safe(s).replace("|", "/").replace(",", " ")
-
-def now():
-    """Return current date and time."""
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-# ================== STUDENT FUNCTIONS ==================
-def find_student(sid):
-    """Find student by ID."""
-    sid = safe(sid)
-    for s in students:
-        if s["Id"] == sid:
-            return s
-    return None
-
-def student_exists(sid):
-    """Check if student already exists."""
-    return find_student(sid) is not None
-
-# ================== RESULT FUNCTIONS ==================
-def has_taken_exam(sid):
-    """Check if student already took the exam."""
-    sid = safe(sid)
-    for r in results:
-        if r["Id"] == sid:
-            return True
-    return False
-
-def save_result(sid, name, score, total):
-    """Save exam result (session only)."""
-    pct = (score / total) * 100 if total else 0
-    status = "Pass" if pct >= 50 else "Fail"
-    results.append({
-        "Id": sid,
-        "Name": name,
-        "Score": score,
-        "Total": total,
-        "Percent": f"{pct:.2f}",
-        "Status": status,
-        "Date": now()
-    })
-
-def get_result(sid):
-    """Get latest result for a student."""
-    sid = safe(sid)
-    for r in reversed(results):
-        if r["Id"] == sid:
-            return r
-    return None
-
-# ================== GUI CORE ==================
+# ================== CORE ==================
 root = tk.Tk()
-style = ttk.Style(root)
+root.title("Smart Exam System")
+root.state('zoomed')  # Fullscreen / maximized
+root.configure(bg="#e6f0ff")  # Light blue background
 
+style = ttk.Style(root)
 style.theme_use("clam")
 
-root.configure(bg="#f5f7fb")
-
-style.configure("TFrame", background="#f5f7fb")
-style.configure("TLabel", background="#f5f7fb", foreground="#111827")
-
-style.configure(
-    "Sidebar.TFrame",
-    background="#111827"
-)
-
-style.configure(
-    "Header.TLabel",
-    font=("Segoe UI", 20, "bold"),
-    foreground="#111827",
-    background="#f5f7fb"
-)
-
-style.configure(
-    "TButton",
-    font=("Segoe UI", 11),
-    padding=8
-)
-
-style.configure(
-    "Accent.TButton",
-    background="#2563eb",
-    foreground="white",
-    font=("Segoe UI", 11, "bold"),
-    padding=10,
-    borderwidth=0
-)
-
-style.map(
-    "Accent.TButton",
-    background=[("active", "#1d4ed8")]
-)
-
-style.configure(
-    "Horizontal.TProgressbar",
-    troughcolor="#e5e7eb",
-    background="#2563eb",
-    thickness=8
-)
-
-
-
-style.configure(
-    "TLabel",
-    font=("Segoe UI", 11)
-)
-
-root.title("Smart Exam System (Session Based)")
-root.geometry("750x520")
+# Global Styles
+style.configure("TFrame", background="#e6f0ff")
+style.configure("Sidebar.TFrame", background="#0047b3")
+style.configure("Header.TLabel", font=("Segoe UI", 20, "bold"), background="#e6f0ff")
+style.configure("Card.TFrame", background="white", relief="raised", borderwidth=1)
+style.configure("CardTitle.TLabel", font=("Segoe UI", 14, "bold"), background="white")
+style.configure("Accent.TButton", background="#1e40af", foreground="white", font=("Segoe UI", 11, "bold"), padding=8)
+style.map("Accent.TButton", background=[("active", "#1d4ed8")])
+style.configure("Horizontal.TProgressbar", thickness=8)
 
 main = ttk.Frame(root)
 main.pack(fill="both", expand=True)
 
-# Timer label (must not be destroyed)
-timer_label = ttk.Label(main, text="", font=("Arial", 12, "bold"))
-timer_label.pack(pady=5)
-
+# ================== LAYOUT ==================
 def clear():
-    """Clear screen except the timer label."""
     for w in main.winfo_children():
-        if w != timer_label:
-            w.destroy()
-    timer_label.config(text="")
+        w.destroy()
 
-def header(title):
-    ttk.Label(main, text=title, style="Header.TLabel").pack(pady=15)
-
-def layout_with_sidebar(title, buttons):
+def layout(title, sidebar=None):
     clear()
-
     wrapper = ttk.Frame(main)
     wrapper.pack(fill="both", expand=True)
 
-    sidebar = ttk.Frame(wrapper, width=210, style="Sidebar.TFrame")
-    sidebar.pack(side="left", fill="y", padx=10, pady=10)
-    ttk.Label(
-    sidebar,
-    text="SMART EXAM",
-    font=("Segoe UI", 15, "bold"),
-    foreground="#e5e7eb",
-    background="#111827"
-).pack(pady=(15, 25))
+    if sidebar:
+        sb = ttk.Frame(wrapper, style="Sidebar.TFrame", width=220)
+        sb.pack(side="left", fill="y")
+        ttk.Label(sb, text="SMART EXAM", font=("Segoe UI", 18, "bold"),
+                  foreground="white", background="#0047b3").pack(pady=30)
+        for t, c in sidebar:
+            btn = ttk.Button(sb, text=t, command=c, style="Accent.TButton")
+            btn.pack(fill="x", padx=15, pady=6)
 
+    content = ttk.Frame(wrapper, padding=25)
+    content.pack(side="right", fill="both", expand=True)
 
-    content = ttk.Frame(wrapper)
-    content.pack(side="right", fill="both", expand=True, padx=20, pady=10)
+    # Center wrapper
+    center_wrapper = ttk.Frame(content)
+    center_wrapper.place(relx=0.5, rely=0.5, anchor='center')
+    ttk.Label(center_wrapper, text=title, style="Header.TLabel").pack(anchor="center", pady=(0, 25))
 
-    for text, cmd in buttons:
-        ttk.Button(sidebar, text=text, command=cmd).pack(fill="x", pady=4)
+    return center_wrapper
 
-    ttk.Label(
-        content,
-        text=title,
-        style="Header.TLabel"
-    ).pack(anchor="w", pady=10)
-
-    return content
-
-
-# ================== HOME SCREEN ==================
+# ================== HOME ==================
 def home():
-    stop_timer()
-    clear()
-    header("Smart Exam System")
+    content = layout("Welcome")
+    card = ttk.Frame(content, style="Card.TFrame", padding=40)
+    card.pack()
+    ttk.Button(card, text="Admin Login", width=25, style="Accent.TButton", command=admin_login).pack(pady=10)
+    ttk.Button(card, text="Student Login", width=25, style="Accent.TButton", command=student_login).pack(pady=10)
+    ttk.Button(card, text="Exit", width=25, style="Accent.TButton", command=root.destroy).pack(pady=10)
 
-    box = ttk.Frame(main)
-    box.pack(pady=30)
-
-    ttk.Button(box, text="Admin Login", width=30, command=admin_login).pack(pady=6)
-    ttk.Button(box, text="Student Login", width=30, command=student_login).pack(pady=6)
-    ttk.Button(box, text="Exit", width=30, command=root.destroy).pack(pady=6)
-
-
-# ================== ADMIN SECTION ==================
+# ================== ADMIN ==================
 def admin_login():
-    clear()
-    header("Admin Login")
+    content = layout("Admin Login")
+    card = ttk.Frame(content, style="Card.TFrame", padding=30)
+    card.pack()
 
-    u = tk.StringVar()
-    p = tk.StringVar()
+    u, p = tk.StringVar(), tk.StringVar()
 
-    ttk.Label(main, text="Username").pack()
-    ttk.Entry(main, textvariable=u).pack()
-    ttk.Label(main, text="Password").pack()
-    ttk.Entry(main, textvariable=p, show="*").pack()
+    for lbl, var, sec in [("Username", u, False), ("Password", p, True)]:
+        row = ttk.Frame(card)
+        row.pack(fill="x", pady=8)
+        ttk.Label(row, text=lbl, width=12).pack(side="left")
+        ttk.Entry(row, textvariable=var, show="*" if sec else "").pack(fill="x", expand=True)
 
     def check():
         if safe(u.get()) == ADMIN_USER and safe(p.get()) == ADMIN_PASS:
             admin_menu()
         else:
-            messagebox.showerror("Error", "Invalid login")
+            messagebox.showerror("Error", "Invalid credentials")
 
-    ttk.Button(main, text="Login", command=check).pack(pady=10)
-    ttk.Button(main, text="Back", command=home).pack()
+    ttk.Button(card, text="Login", style="Accent.TButton", command=check).pack(pady=15)
 
 def admin_menu():
-    content = layout_with_sidebar(
+    content = layout(
         "Admin Dashboard",
-        [
-            ("Add Student", add_student),
-            ("Add Question", add_question),
-            ("View Results", view_results),
-            ("Logout", home),
-        ]
+        [("Add Student", add_student),
+         ("Add Question", add_question),
+         ("View Results", view_results),
+         ("Logout", home)]
     )
-
-    ttk.Label(
-        content,
-        text="Manage students, questions and exam results efficiently.",
-        font=("Segoe UI", 11)
-    ).pack(anchor="w", pady=5)
-
+    ttk.Label(content, text="Manage students, questions, and results.", font=("Segoe UI", 12)).pack(anchor="w")
 
 def add_student():
-    content = layout_with_sidebar(
-        "Add Student",
-        [("Back", admin_menu)]
-    )
+    content = layout("Add Student", [("Back", admin_menu)])
+    card = ttk.Frame(content, style="Card.TFrame", padding=30)
+    card.pack()
 
-    form = ttk.Frame(content)
-    form.pack(pady=20)
+    sid, name = tk.StringVar(), tk.StringVar()
 
-    ttk.Label(form, text="Student ID").grid(row=0, column=0, sticky="w", pady=5)
-    sid = tk.StringVar()
-    ttk.Entry(form, textvariable=sid, width=30).grid(row=0, column=1, pady=5)
-
-    ttk.Label(form, text="Student Name").grid(row=1, column=0, sticky="w", pady=5)
-    name = tk.StringVar()
-    ttk.Entry(form, textvariable=name, width=30).grid(row=1, column=1, pady=5)
+    for lbl, var in [("Student ID", sid), ("Student Name", name)]:
+        row = ttk.Frame(card)
+        row.pack(fill="x", pady=10)
+        ttk.Label(row, text=lbl, width=15).pack(side="left")
+        ttk.Entry(row, textvariable=var).pack(fill="x", expand=True)
 
     def save():
-        s = safe(sid.get())
-        n = clean(name.get())
-        if not s or not n:
-            messagebox.showerror("Error", "Fill all fields")
+        if not safe(sid.get()) or not safe(name.get()):
+            messagebox.showerror("Error", "All fields required")
             return
-        if student_exists(s):
-            messagebox.showerror("Error", "Student already exists")
-            return
-        students.append({"Id": s, "Name": n})
+        students.append({"Id": safe(sid.get()), "Name": clean(name.get())})
         messagebox.showinfo("Saved", "Student added")
         admin_menu()
 
-    ttk.Button(content, text="Save Student", command=save).pack(pady=10)
+    ttk.Button(card, text="Save Student", style="Accent.TButton", command=save).pack(anchor="e", pady=15)
 
 def add_question():
-    clear()
-    header("Add MCQ Question")
+    content = layout("Add Question", [("Back", admin_menu)])
+    card = ttk.Frame(content, style="Card.TFrame", padding=25)
+    card.pack()
 
-    vars_ = [tk.StringVar() for _ in range(6)]
-    labels = ["Question", "A", "B", "C", "D", "Correct (A/B/C/D)"]
+    fields = ["Question", "A", "B", "C", "D", "Correct (A/B/C/D)"]
+    vars_ = [tk.StringVar() for _ in fields]
 
-    for i in range(6):
-        ttk.Label(main, text=labels[i]).pack()
-        ttk.Entry(main, textvariable=vars_[i]).pack()
+    for lbl, var in zip(fields, vars_):
+        row = ttk.Frame(card)
+        row.pack(fill="x", pady=6)
+        ttk.Label(row, text=lbl, width=20).pack(side="left")
+        ttk.Entry(row, textvariable=var).pack(fill="x", expand=True)
 
     def save():
         if not all(safe(v.get()) for v in vars_):
-            messagebox.showerror("Error", "Fill all fields")
+            messagebox.showerror("Error", "All fields required")
             return
-
-        correct = safe(vars_[5].get()).upper()
-        if correct not in ["A", "B", "C", "D"]:
-            messagebox.showerror("Error", "Correct answer must be A, B, C, or D")
-            return
-
         questions.append({
             "q": clean(vars_[0].get()),
             "A": clean(vars_[1].get()),
             "B": clean(vars_[2].get()),
             "C": clean(vars_[3].get()),
             "D": clean(vars_[4].get()),
-            "correct": correct
+            "correct": safe(vars_[5].get()).upper()
         })
-
-        messagebox.showinfo("Saved", "Question added (session only)")
+        messagebox.showinfo("Saved", "Question added")
         admin_menu()
 
-    ttk.Button(main, text="Save", command=save).pack(pady=10)
-    ttk.Button(main, text="Back", command=admin_menu).pack()
+    ttk.Button(card, text="Save Question", style="Accent.TButton", command=save).pack(anchor="e", pady=15)
 
 def view_results():
-    clear()
-    header("Results")
+    content = layout("Results", [("Back", admin_menu)])
+    for r in results:
+        card = ttk.Frame(content, style="Card.TFrame", padding=15)
+        card.pack(pady=6)
+        ttk.Label(card, text=f"{r['Name']} ({r['Id']})", style="CardTitle.TLabel").pack(anchor="w")
+        ttk.Label(card, text=f"Score: {r['Score']}/{r['Total']} | {r['Percent']}% | {r['Status']} | {r['Date']}").pack(anchor="w")
 
-    if not results:
-        ttk.Label(main, text="No results yet").pack()
-    else:
-        for r in results:
-            ttk.Label(
-                main,
-                text=f"{r['Id']} | {r['Name']} | {r['Score']}/{r['Total']} | "
-                     f"{r['Percent']}% | {r['Status']} | {r['Date']}"
-            ).pack(anchor="w", padx=10)
-
-    ttk.Button(main, text="Back", command=admin_menu).pack(pady=10)
-
-# ================== STUDENT SECTION ==================
+# ================== STUDENT ==================
 def student_login():
-    global current_student
-    clear()
-    header("Student Login")
+    content = layout("Student Login")
+    card = ttk.Frame(content, style="Card.TFrame", padding=40)
+    card.pack()
 
     sid = tk.StringVar()
-    ttk.Label(main, text="Student ID").pack()
-    ttk.Entry(main, textvariable=sid).pack()
+    ttk.Entry(card, textvariable=sid, width=35, font=("Segoe UI", 11)).pack(pady=15)
 
     def login():
         global current_student
-        s = find_student(sid.get())
-        if not s:
-            messagebox.showerror("Error", "Student not found (session)")
-            return
-        current_student = s
-        student_menu()
+        for s in students:
+            if s["Id"] == safe(sid.get()):
+                current_student = s
+                student_menu()
+                return
+        messagebox.showerror("Error", "Student not found")
 
-    ttk.Button(main, text="Login", command=login).pack(pady=10)
-    ttk.Button(main, text="Back", command=home).pack()
+    ttk.Button(card, text="Login", style="Accent.TButton", command=login).pack(pady=10)
 
 def student_menu():
-    stop_timer()
-    content = layout_with_sidebar(
+    content = layout(
         f"Welcome, {current_student['Name']}",
-        [
-            ("Take Exam", start_exam),
-            ("My Result", view_my_result),
-            ("Logout", home),
-        ]
+        [("Take Exam", start_exam),
+         ("My Result", my_result),
+         ("Logout", home)]
     )
 
-    ttk.Label(
-        content,
-        text="Choose an action from the left panel.",
-        font=("Segoe UI", 11)
-    ).pack(anchor="w", pady=5)
+def my_result():
+    content = layout("My Result", [("Back", student_menu)])
+    found = False
+    for r in results:
+        if r["Id"] == current_student["Id"]:
+            found = True
+            card = ttk.Frame(content, style="Card.TFrame", padding=25)
+            card.pack(pady=10)
+            for k, v in r.items():
+                ttk.Label(card, text=f"{k}: {v}", font=("Segoe UI", 11)).pack(anchor="w")
+    if not found:
+        ttk.Label(content, text="No results found.", font=("Segoe UI", 12)).pack(anchor="w", pady=20)
 
-
-def view_my_result():
-    clear()
-    header("My Result")
-
-    r = get_result(current_student["Id"])
-    if not r:
-        ttk.Label(main, text="No result yet").pack()
-    else:
-        for k, v in r.items():
-            ttk.Label(main, text=f"{k}: {v}").pack(anchor="w", padx=10)
-
-    ttk.Button(main, text="Back", command=student_menu).pack(pady=10)
-
-# ================== TIMER FUNCTIONS ==================
-def stop_timer():
-    global timer_after_id
-    if timer_after_id is not None:
-        try:
-            root.after_cancel(timer_after_id)
-        except Exception:
-            pass
-        timer_after_id = None
-
-def close_open_question_window():
-    global open_question_window
-    if open_question_window is not None:
-        try:
-            if open_question_window.winfo_exists():
-                open_question_window.destroy()
-        except Exception:
-            pass
-    open_question_window = None
-
-def update_timer():
-    global exam_time_left, exam_running, timer_after_id
-
-    if not exam_running:
-        timer_label.config(text="")
-        stop_timer()
-        return
-
-    timer_label.config(text=f"⏱ Time Left: {exam_time_left} sec")
-
-    if exam_time_left <= 0:
-        exam_running = False
-        close_open_question_window()
-        stop_timer()
-        messagebox.showinfo("Time Up", "Exam time is over!")
-        finish_exam()
-        return
-
-    exam_time_left -= 1
-    timer_after_id = root.after(1000, update_timer)
-
-# ================== EXAM FLOW ==================
+# ================== EXAM ==================
 def start_exam():
-    global exam_time_left, exam_running
-    global current_questions, current_score, current_total
-    global question_index, progress_bar
+    global current_questions, current_score, current_total, question_index, exam_running, exam_time_left
 
-    if has_taken_exam(current_student["Id"]):
-        messagebox.showwarning("Not Allowed", "You already took the exam")
-        return
-
-    if not questions:
-        messagebox.showerror("Error", "No questions available")
-        return
-
-    current_questions = questions[:]
-    if QUESTIONS_PER_EXAM > 0:
-        current_questions = random.sample(
-            current_questions,
-            min(QUESTIONS_PER_EXAM, len(current_questions))
-        )
-
+    current_questions = random.sample(questions, min(QUESTIONS_PER_EXAM, len(questions)))
     current_score = 0
     current_total = len(current_questions)
     question_index = 0
-
     exam_time_left = EXAM_DURATION_SECONDS
     exam_running = True
 
-    clear()
-    header("Exam In Progress")
+    content = layout("Exam In Progress")
+    timer = ttk.Label(content, font=("Segoe UI", 12, "bold"), foreground="red", background="#e6f0ff")
+    timer.pack(anchor="e")
 
-    progress_bar = ttk.Progressbar(
-    main,
-    length=400,
-    maximum=current_total,
-    mode="determinate",
-    style="Horizontal.TProgressbar"
-)
+    progress = ttk.Progressbar(content, maximum=current_total)
+    progress.pack(fill="x", pady=12)
 
-    progress_bar.pack(pady=10)
+    card = ttk.Frame(content, style="Card.TFrame", padding=25)
+    card.pack(pady=20)
 
-    stop_timer()
-    update_timer()
-    ask_next_question(0)
+    question_lbl = ttk.Label(card, font=("Segoe UI", 14, "bold"), wraplength=700)
+    question_lbl.pack(anchor="w", pady=10)
 
+    var = tk.StringVar()
+    radios = []
 
-def ask_next_question(index):
-    global question_index
+    for _ in range(4):
+        rb = ttk.Radiobutton(card, variable=var, style="TRadiobutton")
+        rb.pack(anchor="w", pady=6)
+        radios.append(rb)
 
-    if not exam_running:
-        return
-
-    question_index = index
-    if progress_bar:
-        progress_bar["value"] = index
-
-    if index >= len(current_questions):
-        finish_exam()
-        return
-
-    q = current_questions[index]
-
-    def on_answer(ans):
-        global current_score
-        if not exam_running:
-            return
-        if safe(ans).upper() == safe(q["correct"]).upper():
-            current_score += 1
-        ask_next_question(index + 1)
-
-    ask_question(q, on_answer)
-
-
-def ask_question(q, callback):
-    global open_question_window
-
-    if not exam_running:
-        return
-
-    win = tk.Toplevel(root)
-    open_question_window = win
-    win.title("Exam Question")
-    win.geometry("520x380")
-    win.resizable(False, False)
-
-    container = ttk.Frame(win, padding=15)
-    container.pack(fill="both", expand=True)
-
-    var = tk.StringVar(value="")
-
-    ttk.Label(
-        container,
-        text=q["q"],
-        wraplength=480,
-        font=("Segoe UI", 12, "bold")
-    ).pack(pady=10)
-
-    for k in ["A", "B", "C", "D"]:
-        ttk.Radiobutton(
-            container,
-            text=f"{k}) {q[k]}",
-            variable=var,
-            value=k
-        ).pack(anchor="w", pady=4)
-
-    submit_btn = ttk.Button(container, text="Submit Answer")
-    submit_btn.pack(pady=15)
+    def update():
+        nonlocal question_lbl
+        q = current_questions[question_index]
+        question_lbl.config(text=q["q"])
+        for rb, k in zip(radios, ["A", "B", "C", "D"]):
+            rb.config(text=f"{k}) {q[k]}", value=k)
+        progress["value"] = question_index + 1
+        var.set("")
 
     def submit():
-        if not var.get():
-            messagebox.showwarning("Warning", "Please select an answer")
-            return
-        win.destroy()
-        callback(var.get())
+        global current_score, question_index
+        if var.get() == current_questions[question_index]["correct"]:
+            current_score += 1
+        question_index += 1
+        if question_index >= current_total:
+            finish_exam()
+        else:
+            update()
 
-    submit_btn.config(command=submit)
-    win.protocol("WM_DELETE_WINDOW", submit)
-    win.grab_set()
-
-
+    ttk.Button(card, text="Next", style="Accent.TButton", command=submit).pack(anchor="e", pady=15)
+    update()
 
 def finish_exam():
-    global exam_running
-    if exam_running:
-        exam_running = False
-
-    stop_timer()
-    close_open_question_window()
-
-    save_result(
-        current_student["Id"],
-        current_student["Name"],
-        current_score,
-        current_total
-    )
-
-    percent = (current_score / current_total) * 100
-    status = "PASS ✅" if percent >= 50 else "FAIL ❌"
-
-    messagebox.showinfo(
-        "Exam Finished",
-        f"Score: {current_score}/{current_total}\n"
-        f"Percentage: {percent:.1f}%\n"
-        f"Status: {status}"
-    )
-
+    results.append({
+        "Id": current_student["Id"],
+        "Name": current_student["Name"],
+        "Score": current_score,
+        "Total": current_total,
+        "Percent": f"{(current_score/current_total)*100:.2f}",
+        "Status": "Pass" if current_score/current_total >= 0.5 else "Fail",
+        "Date": now()
+    })
+    messagebox.showinfo("Finished", "Exam completed")
     student_menu()
 
-
-# ================== START APPLICATION ==================
+# ================== START ==================
 home()
 root.mainloop()
+
+
+# import tkinter as tk
+# from tkinter import ttk, messagebox
+# import random
+# from datetime import datetime
+
+# # ================== DATA (SESSION ONLY) ==================
+# students = []
+# questions = []
+# results = []
+
+# ADMIN_USER = "admin"
+# ADMIN_PASS = "1234"
+
+# EXAM_DURATION_SECONDS = 60
+# QUESTIONS_PER_EXAM = 5
+
+# current_student = None
+# current_questions = []
+# current_score = 0
+# current_total = 0
+# question_index = 0
+# exam_running = False
+# exam_time_left = 0
+# timer_after_id = None
+
+# # ================== HELPERS ==================
+# def safe(s): return (s or "").strip()
+# def clean(s): return safe(s).replace("|", "/").replace(",", " ")
+# def now(): return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+# # ================== CORE ==================
+# root = tk.Tk()
+# root.title("Smart Exam System")
+# root.geometry("950x600")
+# root.configure(bg="#e6f0ff")  # Light blue background
+
+# style = ttk.Style(root)
+# style.theme_use("clam")
+
+# # Global Styles
+# style.configure("TFrame", background="#e6f0ff")
+# style.configure("Sidebar.TFrame", background="#0047b3")  # Dark blue sidebar
+# style.configure("Header.TLabel", font=("Segoe UI", 20, "bold"), background="#e6f0ff")
+# style.configure("Card.TFrame", background="white", relief="raised", borderwidth=1)
+# style.configure("CardTitle.TLabel", font=("Segoe UI", 14, "bold"), background="white")
+# style.configure("Accent.TButton", background="#1e40af", foreground="white", font=("Segoe UI", 11, "bold"), padding=8)
+# style.map("Accent.TButton", background=[("active", "#1d4ed8")])
+# style.configure("Horizontal.TProgressbar", thickness=8)
+
+# main = ttk.Frame(root)
+# main.pack(fill="both", expand=True)
+
+# # ================== LAYOUT ==================
+# def clear():
+#     for w in main.winfo_children():
+#         w.destroy()
+
+# def layout(title, sidebar=None):
+#     clear()
+#     wrapper = ttk.Frame(main)
+#     wrapper.pack(fill="both", expand=True)
+
+#     if sidebar:
+#         sb = ttk.Frame(wrapper, style="Sidebar.TFrame", width=220)
+#         sb.pack(side="left", fill="y")
+#         ttk.Label(sb, text="SMART EXAM", font=("Segoe UI", 18, "bold"),
+#                   foreground="white", background="#0047b3").pack(pady=30)
+#         for t, c in sidebar:
+#             btn = ttk.Button(sb, text=t, command=c, style="Accent.TButton")
+#             btn.pack(fill="x", padx=15, pady=6)
+
+#     content = ttk.Frame(wrapper, padding=25)
+#     content.pack(side="right", fill="both", expand=True)
+#     ttk.Label(content, text=title, style="Header.TLabel").pack(anchor="w", pady=(0, 25))
+#     return content
+
+# # ================== HOME ==================
+# def home():
+#     content = layout("Welcome")
+#     card = ttk.Frame(content, style="Card.TFrame", padding=40)
+#     card.pack(pady=100)
+#     ttk.Button(card, text="Admin Login", width=25, style="Accent.TButton", command=admin_login).pack(pady=10)
+#     ttk.Button(card, text="Student Login", width=25, style="Accent.TButton", command=student_login).pack(pady=10)
+#     ttk.Button(card, text="Exit", width=25, style="Accent.TButton", command=root.destroy).pack(pady=10)
+
+# # ================== ADMIN ==================
+# def admin_login():
+#     content = layout("Admin Login")
+#     card = ttk.Frame(content, style="Card.TFrame", padding=30)
+#     card.pack(pady=60)
+
+#     u, p = tk.StringVar(), tk.StringVar()
+
+#     for lbl, var, sec in [("Username", u, False), ("Password", p, True)]:
+#         row = ttk.Frame(card)
+#         row.pack(fill="x", pady=8)
+#         ttk.Label(row, text=lbl, width=12).pack(side="left")
+#         ttk.Entry(row, textvariable=var, show="*" if sec else "").pack(fill="x", expand=True)
+
+#     def check():
+#         if safe(u.get()) == ADMIN_USER and safe(p.get()) == ADMIN_PASS:
+#             admin_menu()
+#         else:
+#             messagebox.showerror("Error", "Invalid credentials")
+
+#     ttk.Button(card, text="Login", style="Accent.TButton", command=check).pack(pady=15)
+
+# def admin_menu():
+#     content = layout(
+#         "Admin Dashboard",
+#         [("Add Student", add_student),
+#          ("Add Question", add_question),
+#          ("View Results", view_results),
+#          ("Logout", home)]
+#     )
+#     ttk.Label(content, text="Manage students, questions, and results.", font=("Segoe UI", 12)).pack(anchor="w")
+
+# def add_student():
+#     content = layout("Add Student", [("Back", admin_menu)])
+#     card = ttk.Frame(content, style="Card.TFrame", padding=30)
+#     card.pack(fill="x")
+
+#     sid, name = tk.StringVar(), tk.StringVar()
+
+#     for lbl, var in [("Student ID", sid), ("Student Name", name)]:
+#         row = ttk.Frame(card)
+#         row.pack(fill="x", pady=10)
+#         ttk.Label(row, text=lbl, width=15).pack(side="left")
+#         ttk.Entry(row, textvariable=var).pack(fill="x", expand=True)
+
+#     def save():
+#         if not safe(sid.get()) or not safe(name.get()):
+#             messagebox.showerror("Error", "All fields required")
+#             return
+#         students.append({"Id": safe(sid.get()), "Name": clean(name.get())})
+#         messagebox.showinfo("Saved", "Student added")
+#         admin_menu()
+
+#     ttk.Button(card, text="Save Student", style="Accent.TButton", command=save).pack(anchor="e", pady=15)
+
+# def add_question():
+#     content = layout("Add Question", [("Back", admin_menu)])
+#     card = ttk.Frame(content, style="Card.TFrame", padding=25)
+#     card.pack(fill="x")
+
+#     fields = ["Question", "A", "B", "C", "D", "Correct (A/B/C/D)"]
+#     vars_ = [tk.StringVar() for _ in fields]
+
+#     for lbl, var in zip(fields, vars_):
+#         row = ttk.Frame(card)
+#         row.pack(fill="x", pady=6)
+#         ttk.Label(row, text=lbl, width=20).pack(side="left")
+#         ttk.Entry(row, textvariable=var).pack(fill="x", expand=True)
+
+#     def save():
+#         if not all(safe(v.get()) for v in vars_):
+#             messagebox.showerror("Error", "All fields required")
+#             return
+#         questions.append({
+#             "q": clean(vars_[0].get()),
+#             "A": clean(vars_[1].get()),
+#             "B": clean(vars_[2].get()),
+#             "C": clean(vars_[3].get()),
+#             "D": clean(vars_[4].get()),
+#             "correct": safe(vars_[5].get()).upper()
+#         })
+#         messagebox.showinfo("Saved", "Question added")
+#         admin_menu()
+
+#     ttk.Button(card, text="Save Question", style="Accent.TButton", command=save).pack(anchor="e", pady=15)
+
+# def view_results():
+#     content = layout("Results", [("Back", admin_menu)])
+#     for r in results:
+#         card = ttk.Frame(content, style="Card.TFrame", padding=15)
+#         card.pack(fill="x", pady=6)
+#         ttk.Label(card, text=f"{r['Name']} ({r['Id']})", style="CardTitle.TLabel").pack(anchor="w")
+#         ttk.Label(card, text=f"Score: {r['Score']}/{r['Total']} | {r['Percent']}% | {r['Status']} | {r['Date']}").pack(anchor="w")
+
+# # ================== STUDENT ==================
+# def student_login():
+#     content = layout("Student Login")
+#     card = ttk.Frame(content, style="Card.TFrame", padding=40)
+#     card.pack(pady=80)
+
+#     sid = tk.StringVar()
+#     ttk.Entry(card, textvariable=sid, width=35, font=("Segoe UI", 11)).pack(pady=15)
+
+#     def login():
+#         global current_student
+#         for s in students:
+#             if s["Id"] == safe(sid.get()):
+#                 current_student = s
+#                 student_menu()
+#                 return
+#         messagebox.showerror("Error", "Student not found")
+
+#     ttk.Button(card, text="Login", style="Accent.TButton", command=login).pack(pady=10)
+
+# def student_menu():
+#     content = layout(
+#         f"Welcome, {current_student['Name']}",
+#         [("Take Exam", start_exam),
+#          ("My Result", my_result),
+#          ("Logout", home)]
+#     )
+
+# def my_result():
+#     content = layout("My Result", [("Back", student_menu)])
+#     found = False
+#     for r in results:
+#         if r["Id"] == current_student["Id"]:
+#             found = True
+#             card = ttk.Frame(content, style="Card.TFrame", padding=25)
+#             card.pack(pady=10)
+#             for k, v in r.items():
+#                 ttk.Label(card, text=f"{k}: {v}", font=("Segoe UI", 11)).pack(anchor="w")
+#     if not found:
+#         ttk.Label(content, text="No results found.", font=("Segoe UI", 12)).pack(anchor="w", pady=20)
+
+# # ================== EXAM ==================
+# def start_exam():
+#     global current_questions, current_score, current_total, question_index, exam_running, exam_time_left
+
+#     current_questions = random.sample(questions, min(QUESTIONS_PER_EXAM, len(questions)))
+#     current_score = 0
+#     current_total = len(current_questions)
+#     question_index = 0
+#     exam_time_left = EXAM_DURATION_SECONDS
+#     exam_running = True
+
+#     content = layout("Exam In Progress")
+#     timer = ttk.Label(content, font=("Segoe UI", 12, "bold"), foreground="red", background="#e6f0ff")
+#     timer.pack(anchor="e")
+
+#     progress = ttk.Progressbar(content, maximum=current_total)
+#     progress.pack(fill="x", pady=12)
+
+#     card = ttk.Frame(content, style="Card.TFrame", padding=25)
+#     card.pack(fill="x", pady=20)
+
+#     question_lbl = ttk.Label(card, font=("Segoe UI", 14, "bold"), wraplength=700)
+#     question_lbl.pack(anchor="w", pady=10)
+
+#     var = tk.StringVar()
+#     radios = []
+
+#     for _ in range(4):
+#         rb = ttk.Radiobutton(card, variable=var, style="TRadiobutton")
+#         rb.pack(anchor="w", pady=6)
+#         radios.append(rb)
+
+#     def update():
+#         nonlocal question_lbl
+#         q = current_questions[question_index]
+#         question_lbl.config(text=q["q"])
+#         for rb, k in zip(radios, ["A", "B", "C", "D"]):
+#             rb.config(text=f"{k}) {q[k]}", value=k)
+#         progress["value"] = question_index + 1
+#         var.set("")
+
+#     def submit():
+#         global current_score, question_index
+#         if var.get() == current_questions[question_index]["correct"]:
+#             current_score += 1
+#         question_index += 1
+#         if question_index >= current_total:
+#             finish_exam()
+#         else:
+#             update()
+
+#     ttk.Button(card, text="Next", style="Accent.TButton", command=submit).pack(anchor="e", pady=15)
+#     update()
+
+# def finish_exam():
+#     results.append({
+#         "Id": current_student["Id"],
+#         "Name": current_student["Name"],
+#         "Score": current_score,
+#         "Total": current_total,
+#         "Percent": f"{(current_score/current_total)*100:.2f}",
+#         "Status": "Pass" if current_score/current_total >= 0.5 else "Fail",
+#         "Date": now()
+#     })
+#     messagebox.showinfo("Finished", "Exam completed")
+#     student_menu()
+
+# # ================== START ==================
+# home()
+# root.mainloop()
+
+
+
+# import tkinter as tk
+# from tkinter import ttk, messagebox
+# import random
+# from datetime import datetime
+
+# # ================== DATA (SESSION ONLY) ==================
+# students = []
+# questions = []
+# results = []
+
+# ADMIN_USER = "admin"
+# ADMIN_PASS = "1234"
+
+# EXAM_DURATION_SECONDS = 60
+# QUESTIONS_PER_EXAM = 5
+
+# current_student = None
+# current_questions = []
+# current_score = 0
+# current_total = 0
+# question_index = 0
+# exam_running = False
+# exam_time_left = 0
+# timer_after_id = None
+
+# # ================== HELPERS ==================
+# def safe(s): return (s or "").strip()
+# def clean(s): return safe(s).replace("|", "/").replace(",", " ")
+# def now(): return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+# # ================== CORE ==================
+# root = tk.Tk()
+# root.title("Smart Exam System")
+# root.geometry("900x580")
+# root.configure(bg="#f5f7fb")
+
+# style = ttk.Style(root)
+# style.theme_use("clam")
+
+# style.configure("TFrame", background="#f5f7fb")
+# style.configure("Sidebar.TFrame", background="#111827")
+# style.configure("Header.TLabel", font=("Segoe UI", 18, "bold"))
+# style.configure("Card.TFrame", background="white", relief="solid", borderwidth=1)
+# style.configure("CardTitle.TLabel", font=("Segoe UI", 13, "bold"), background="white")
+# style.configure("Accent.TButton", background="#2563eb", foreground="white", font=("Segoe UI", 11, "bold"), padding=10)
+# style.map("Accent.TButton", background=[("active", "#1d4ed8")])
+# style.configure("Horizontal.TProgressbar", thickness=6)
+
+# main = ttk.Frame(root)
+# main.pack(fill="both", expand=True)
+
+# # ================== LAYOUT ==================
+# def clear():
+#     for w in main.winfo_children():
+#         w.destroy()
+
+# def layout(title, sidebar=None):
+#     clear()
+#     wrapper = ttk.Frame(main)
+#     wrapper.pack(fill="both", expand=True)
+
+#     if sidebar:
+#         sb = ttk.Frame(wrapper, style="Sidebar.TFrame", width=220)
+#         sb.pack(side="left", fill="y")
+#         ttk.Label(sb, text="SMART EXAM", font=("Segoe UI", 16, "bold"),
+#                   foreground="#e5e7eb", background="#111827").pack(pady=25)
+#         for t, c in sidebar:
+#             ttk.Button(sb, text=t, command=c).pack(fill="x", padx=15, pady=6)
+
+#     content = ttk.Frame(wrapper, padding=25)
+#     content.pack(side="right", fill="both", expand=True)
+#     ttk.Label(content, text=title, style="Header.TLabel").pack(anchor="w", pady=(0, 20))
+#     return content
+
+# # ================== HOME ==================
+# def home():
+#     content = layout("Welcome")
+#     card = ttk.Frame(content, style="Card.TFrame", padding=30)
+#     card.pack(pady=80)
+#     ttk.Button(card, text="Admin Login", width=30, command=admin_login).pack(pady=6)
+#     ttk.Button(card, text="Student Login", width=30, command=student_login).pack(pady=6)
+#     ttk.Button(card, text="Exit", width=30, command=root.destroy).pack(pady=6)
+
+# # ================== ADMIN ==================
+# def admin_login():
+#     content = layout("Admin Login")
+#     card = ttk.Frame(content, style="Card.TFrame", padding=30)
+#     card.pack(pady=80)
+
+#     u, p = tk.StringVar(), tk.StringVar()
+
+#     for lbl, var, sec in [("Username", u, False), ("Password", p, True)]:
+#         row = ttk.Frame(card)
+#         row.pack(fill="x", pady=8)
+#         ttk.Label(row, text=lbl, width=12).pack(side="left")
+#         ttk.Entry(row, textvariable=var, show="*" if sec else "").pack(fill="x", expand=True)
+
+#     def check():
+#         if safe(u.get()) == ADMIN_USER and safe(p.get()) == ADMIN_PASS:
+#             admin_menu()
+#         else:
+#             messagebox.showerror("Error", "Invalid credentials")
+
+#     ttk.Button(card, text="Login", style="Accent.TButton", command=check).pack(pady=15)
+
+# def admin_menu():
+#     content = layout(
+#         "Admin Dashboard",
+#         [("Add Student", add_student),
+#          ("Add Question", add_question),
+#          ("View Results", view_results),
+#          ("Logout", home)]
+#     )
+#     ttk.Label(content, text="Manage students, questions, and results.").pack(anchor="w")
+
+# def add_student():
+#     content = layout("Add Student", [("Back", admin_menu)])
+#     card = ttk.Frame(content, style="Card.TFrame", padding=25)
+#     card.pack(fill="x")
+
+#     sid, name = tk.StringVar(), tk.StringVar()
+
+#     for lbl, var in [("Student ID", sid), ("Student Name", name)]:
+#         row = ttk.Frame(card)
+#         row.pack(fill="x", pady=8)
+#         ttk.Label(row, text=lbl, width=15).pack(side="left")
+#         ttk.Entry(row, textvariable=var).pack(fill="x", expand=True)
+
+#     def save():
+#         if not safe(sid.get()) or not safe(name.get()):
+#             messagebox.showerror("Error", "All fields required")
+#             return
+#         students.append({"Id": safe(sid.get()), "Name": clean(name.get())})
+#         messagebox.showinfo("Saved", "Student added")
+#         admin_menu()
+
+#     ttk.Button(card, text="Save Student", style="Accent.TButton", command=save).pack(anchor="e", pady=15)
+
+# def add_question():
+#     content = layout("Add Question", [("Back", admin_menu)])
+#     card = ttk.Frame(content, style="Card.TFrame", padding=25)
+#     card.pack(fill="x")
+
+#     fields = ["Question", "A", "B", "C", "D", "Correct (A/B/C/D)"]
+#     vars_ = [tk.StringVar() for _ in fields]
+
+#     for lbl, var in zip(fields, vars_):
+#         row = ttk.Frame(card)
+#         row.pack(fill="x", pady=6)
+#         ttk.Label(row, text=lbl, width=20).pack(side="left")
+#         ttk.Entry(row, textvariable=var).pack(fill="x", expand=True)
+
+#     def save():
+#         if not all(safe(v.get()) for v in vars_):
+#             messagebox.showerror("Error", "All fields required")
+#             return
+#         questions.append({
+#             "q": clean(vars_[0].get()),
+#             "A": clean(vars_[1].get()),
+#             "B": clean(vars_[2].get()),
+#             "C": clean(vars_[3].get()),
+#             "D": clean(vars_[4].get()),
+#             "correct": safe(vars_[5].get()).upper()
+#         })
+#         messagebox.showinfo("Saved", "Question added")
+#         admin_menu()
+
+#     ttk.Button(card, text="Save Question", style="Accent.TButton", command=save).pack(anchor="e", pady=15)
+
+# def view_results():
+#     content = layout("Results", [("Back", admin_menu)])
+#     for r in results:
+#         card = ttk.Frame(content, style="Card.TFrame", padding=15)
+#         card.pack(fill="x", pady=6)
+#         ttk.Label(card, text=f"{r['Name']} ({r['Id']})", style="CardTitle.TLabel").pack(anchor="w")
+#         ttk.Label(card, text=f"Score: {r['Score']}/{r['Total']} | {r['Percent']}% | {r['Status']}").pack(anchor="w")
+
+# # ================== STUDENT ==================
+# def student_login():
+#     content = layout("Student Login")
+#     card = ttk.Frame(content, style="Card.TFrame", padding=30)
+#     card.pack(pady=80)
+
+#     sid = tk.StringVar()
+#     ttk.Entry(card, textvariable=sid, width=30).pack(pady=10)
+
+#     def login():
+#         global current_student
+#         for s in students:
+#             if s["Id"] == safe(sid.get()):
+#                 current_student = s
+#                 student_menu()
+#                 return
+#         messagebox.showerror("Error", "Student not found")
+
+#     ttk.Button(card, text="Login", style="Accent.TButton", command=login).pack(pady=10)
+
+# def student_menu():
+#     content = layout(
+#         f"Welcome, {current_student['Name']}",
+#         [("Take Exam", start_exam),
+#          ("My Result", my_result),
+#          ("Logout", home)]
+#     )
+
+# def my_result():
+#     content = layout("My Result", [("Back", student_menu)])
+#     for r in results:
+#         if r["Id"] == current_student["Id"]:
+#             card = ttk.Frame(content, style="Card.TFrame", padding=20)
+#             card.pack()
+#             for k, v in r.items():
+#                 ttk.Label(card, text=f"{k}: {v}").pack(anchor="w")
+
+# # ================== EXAM ==================
+# def start_exam():
+#     global current_questions, current_score, current_total, question_index, exam_running, exam_time_left
+
+#     current_questions = random.sample(questions, min(QUESTIONS_PER_EXAM, len(questions)))
+#     current_score = 0
+#     current_total = len(current_questions)
+#     question_index = 0
+#     exam_time_left = EXAM_DURATION_SECONDS
+#     exam_running = True
+
+#     content = layout("Exam In Progress")
+#     timer = ttk.Label(content, font=("Segoe UI", 11, "bold"), foreground="red")
+#     timer.pack(anchor="e")
+
+#     progress = ttk.Progressbar(content, maximum=current_total)
+#     progress.pack(fill="x", pady=10)
+
+#     card = ttk.Frame(content, style="Card.TFrame", padding=25)
+#     card.pack(fill="x")
+
+#     question_lbl = ttk.Label(card, font=("Segoe UI", 14, "bold"), wraplength=650)
+#     question_lbl.pack(anchor="w", pady=10)
+
+#     var = tk.StringVar()
+#     radios = []
+
+#     for _ in range(4):
+#         rb = ttk.Radiobutton(card, variable=var)
+#         rb.pack(anchor="w", pady=4)
+#         radios.append(rb)
+
+#     def update():
+#         nonlocal question_lbl
+#         q = current_questions[question_index]
+#         question_lbl.config(text=q["q"])
+#         for rb, k in zip(radios, ["A", "B", "C", "D"]):
+#             rb.config(text=f"{k}) {q[k]}", value=k)
+#         progress["value"] = question_index + 1
+#         var.set("")
+
+#     def submit():
+#         global current_score, question_index
+#         if var.get() == current_questions[question_index]["correct"]:
+#             current_score += 1
+#         question_index += 1
+#         if question_index >= current_total:
+#             finish_exam()
+#         else:
+#             update()
+
+#     ttk.Button(card, text="Next", style="Accent.TButton", command=submit).pack(anchor="e", pady=15)
+#     update()
+
+# def finish_exam():
+#     results.append({
+#         "Id": current_student["Id"],
+#         "Name": current_student["Name"],
+#         "Score": current_score,
+#         "Total": current_total,
+#         "Percent": f"{(current_score/current_total)*100:.2f}",
+#         "Status": "Pass" if current_score/current_total >= 0.5 else "Fail",
+#         "Date": now()
+#     })
+#     messagebox.showinfo("Finished", "Exam completed")
+#     student_menu()
+
+# # ================== START ==================
+# home()
+# root.mainloop()
